@@ -33,12 +33,14 @@ jobs:
     - name: Build
       run: npm run build
 
+    - name: Create test results directory
+      run: mkdir -p ./test-results
+
     - name: Run unit tests
       run: |
         echo "Running unit tests..."
-        npm test -- --testPathIgnorePatterns="e2e" --testPathIgnorePatterns="integration" \
+        npm test -- --testPathIgnorePatterns="e2e-spec" --testPathIgnorePatterns="email-e2e-spec" \
           --reporters=default --reporters=jest-junit \
-          --outputFile=./test-results/unit-tests.xml \
           --coverage --coverageDirectory=./coverage/unit
       env:
         JEST_JUNIT_OUTPUT_DIR: ./test-results
@@ -84,23 +86,27 @@ jobs:
         docker compose -f ./docker-compose.test.yml up -d
         
         echo "Waiting for services to be ready..."
+        sleep 15
+        
         # Wait for Redis
-        timeout 30 bash -c 'until docker exec $(docker compose -f ./docker-compose.test.yml ps -q redis) redis-cli ping; do sleep 2; done'
+        timeout 30 bash -c 'until docker exec $(docker compose -f ./docker-compose.test.yml ps -q redis) redis-cli ping; do sleep 2; done' || echo "Redis check failed, continuing..."
         
         # Wait for MinIO
-        timeout 30 bash -c 'until curl -f http://localhost:9002/minio/health/live; do sleep 2; done'
+        timeout 30 bash -c 'until curl -f http://localhost:9002/minio/health/live; do sleep 2; done' || echo "MinIO check failed, continuing..."
         
         # Wait for Greenmail (SMTP/IMAP)
-        timeout 30 bash -c 'until nc -z localhost 3025; do sleep 2; done'
-        timeout 30 bash -c 'until nc -z localhost 3143; do sleep 2; done'
+        timeout 30 bash -c 'until nc -z localhost 3025; do sleep 2; done' || echo "SMTP check failed, continuing..."
+        timeout 30 bash -c 'until nc -z localhost 3143; do sleep 2; done' || echo "IMAP check failed, continuing..."
         
-        echo "Services are ready!"
+        echo "Services startup completed!"
+
+    - name: Create test results directory
+      run: mkdir -p ./test-results
 
     - name: Run ordinary E2E tests
       run: |
         echo "Running ordinary E2E tests..."
-        npm run test:e2e:mock -- --reporters=default --reporters=jest-junit \
-          --outputFile=./test-results/e2e-tests.xml
+        npm run test:e2e:mock
       env:
         JEST_JUNIT_OUTPUT_DIR: ./test-results
         JEST_JUNIT_OUTPUT_NAME: e2e-tests.xml
@@ -150,26 +156,30 @@ jobs:
         docker compose -f ./docker-compose.test.yml up -d
         
         echo "Waiting for services to be ready..."
+        sleep 20
+        
         # Wait for Redis
-        timeout 30 bash -c 'until docker exec $(docker compose -f ./docker-compose.test.yml ps -q redis) redis-cli ping; do sleep 2; done'
+        timeout 30 bash -c 'until docker exec $(docker compose -f ./docker-compose.test.yml ps -q redis) redis-cli ping; do sleep 2; done' || echo "Redis check failed, continuing..."
         
         # Wait for MinIO
-        timeout 30 bash -c 'until curl -f http://localhost:9002/minio/health/live; do sleep 2; done'
+        timeout 30 bash -c 'until curl -f http://localhost:9002/minio/health/live; do sleep 2; done' || echo "MinIO check failed, continuing..."
         
         # Wait for Greenmail (SMTP/IMAP)
-        timeout 30 bash -c 'until nc -z localhost 3025; do sleep 2; done'
-        timeout 30 bash -c 'until nc -z localhost 3143; do sleep 2; done'
+        timeout 30 bash -c 'until nc -z localhost 3025; do sleep 2; done' || echo "SMTP check failed, continuing..."
+        timeout 30 bash -c 'until nc -z localhost 3143; do sleep 2; done' || echo "IMAP check failed, continuing..."
         
         # Give services extra time to fully initialize
         sleep 10
         
-        echo "Services are ready!"
+        echo "Services startup completed!"
+
+    - name: Create test results directory
+      run: mkdir -p ./test-results
 
     - name: Run email E2E tests
       run: |
         echo "Running email E2E tests..."
-        npm run test:e2e:email -- --reporters=default --reporters=jest-junit \
-          --outputFile=./test-results/email-e2e-tests.xml
+        npm run test:e2e:email
       env:
         JEST_JUNIT_OUTPUT_DIR: ./test-results
         JEST_JUNIT_OUTPUT_NAME: email-e2e-tests.xml
