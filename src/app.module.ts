@@ -9,7 +9,7 @@ import { CsvBatchProcessingJob } from './jobs/csv-batch-processing.job';
 import { MockEmailService } from './services/email/mock-email.service';
 import { ImapEmailService } from './services/email/imap-email.service';
 import { Pop3EmailService } from './services/email/pop3-email.service';
-import { MinioStorageService } from './services/storage/minio-storage.service';
+import { MinioStorageService } from './services/storage';
 import { ApiClientService } from './services/api/api-client.service';
 import { CsvProcessingService } from './services/csv/csv-processing.service';
 import { EmailSchedulerService } from './services/scheduler/email-scheduler.service';
