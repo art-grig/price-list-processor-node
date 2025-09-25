@@ -1,0 +1,4 @@
+# Email accounts for testing
+# Format: user@domain|{PLAIN}password
+supplier@example.com|{PLAIN}supplier123
+processor@example.com|{PLAIN}processor123

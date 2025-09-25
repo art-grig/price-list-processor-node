@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # Mock API server for testing
+  mock-api:
+    image: node:18-alpine
+    working_dir: /app
+    ports:
+      - "3001:3001"
+    command: >
+      sh -c "
+        npm init -y &&
+        npm install express cors &&
+        node -e \"
+          const express = require('express');
+          const cors = require('cors');
+          const app = express();
+          app.use(cors());
+          app.use(express.json());
+          
+          app.post('/api/process', (req, res) => {
+            console.log('Received API call:', req.body.fileName, 'rows:', req.body.data.length, 'isLast:', req.body.isLast);
+            res.json({
+              success: true,
+              message: 'Data processed successfully',
+              data: {
+                fileName: req.body.fileName,
+                rowCount: req.body.data.length,
+                isLast: req.body.isLast,
+                timestamp: new Date().toISOString()
+              }
+            });
+          });
+          
+          app.listen(3001, () => console.log('Mock API server running on port 3001'));
+        \"
+      "
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001/api/process"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

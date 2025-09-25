@@ -1,0 +1,80 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_test_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9002:9000"
+      - "9003:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_test_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # Create MinIO bucket for testing
+  minio-setup:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc config host add minio http://minio:9000 minioadmin minioadmin;
+      /usr/bin/mc mb minio/test-bucket --ignore-existing;
+      /usr/bin/mc policy set public minio/test-bucket;
+      exit 0;
+      "
+
+  # Greenmail server for testing (supports SMTP + IMAP)
+  mailserver:
+    image: greenmail/standalone:2.0.1
+    container_name: mailserver
+    ports:
+      - "3025:3025"  # SMTP
+      - "3143:3143"  # IMAP  
+      - "8080:8080"  # Web UI
+    environment:
+      - GREENMAIL_OPTS=-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.auth.disabled -Dgreenmail.verbose
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "3025"]
+      timeout: 10s
+      interval: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - mailnet
+
+volumes:
+  redis_test_data:
+    driver: local
+  minio_test_data:
+    driver: local
+
+networks:
+  default:
+    name: price-list-processor-nest-tests
+  mailnet:
+    name: mailnet

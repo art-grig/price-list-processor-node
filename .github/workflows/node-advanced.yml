@@ -1,0 +1,283 @@
+# Advanced Node.js workflow with better test isolation and reporting
+name: Node.js Advanced Testing
+
+on:
+  push:
+    branches: [ "master", "main", "develop" ]
+  pull_request:
+    branches: [ "master", "main" ]
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '20.x'
+  TEST_TIMEOUT: 600000 # 10 minutes in milliseconds
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Build
+      run: npm run build
+
+    - name: Run unit tests
+      run: |
+        echo "Running unit tests..."
+        npm test -- --testPathIgnorePatterns="e2e" --testPathIgnorePatterns="integration" \
+          --reporters=default --reporters=jest-junit \
+          --outputFile=./test-results/unit-tests.xml \
+          --coverage --coverageDirectory=./coverage/unit
+      env:
+        JEST_JUNIT_OUTPUT_DIR: ./test-results
+        JEST_JUNIT_OUTPUT_NAME: unit-tests.xml
+
+    - name: Upload unit test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: unit-test-results
+        path: |
+          ./test-results/
+          ./coverage/unit/
+        retention-days: 7
+
+  e2e-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [unit-tests]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Build
+      run: npm run build
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Start test infrastructure
+      run: |
+        echo "Starting Redis, MinIO, and Greenmail services..."
+        docker compose -f ./docker-compose.test.yml up -d
+        
+        echo "Waiting for services to be ready..."
+        # Wait for Redis
+        timeout 30 bash -c 'until docker exec $(docker compose -f ./docker-compose.test.yml ps -q redis) redis-cli ping; do sleep 2; done'
+        
+        # Wait for MinIO
+        timeout 30 bash -c 'until curl -f http://localhost:9002/minio/health/live; do sleep 2; done'
+        
+        # Wait for Greenmail (SMTP/IMAP)
+        timeout 30 bash -c 'until nc -z localhost 3025; do sleep 2; done'
+        timeout 30 bash -c 'until nc -z localhost 3143; do sleep 2; done'
+        
+        echo "Services are ready!"
+
+    - name: Run ordinary E2E tests
+      run: |
+        echo "Running ordinary E2E tests..."
+        npm run test:e2e:mock -- --reporters=default --reporters=jest-junit \
+          --outputFile=./test-results/e2e-tests.xml
+      env:
+        JEST_JUNIT_OUTPUT_DIR: ./test-results
+        JEST_JUNIT_OUTPUT_NAME: e2e-tests.xml
+        JOB_RETRY_DELAY: 3000
+
+    - name: Upload E2E test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: e2e-test-results
+        path: ./test-results/
+        retention-days: 7
+
+    - name: Stop test infrastructure
+      if: always()
+      run: |
+        echo "Stopping test infrastructure..."
+        docker compose -f ./docker-compose.test.yml down -v
+
+  email-e2e-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [unit-tests]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Build
+      run: npm run build
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Start fresh test infrastructure
+      run: |
+        echo "Starting Redis, MinIO, and Greenmail services..."
+        docker compose -f ./docker-compose.test.yml up -d
+        
+        echo "Waiting for services to be ready..."
+        # Wait for Redis
+        timeout 30 bash -c 'until docker exec $(docker compose -f ./docker-compose.test.yml ps -q redis) redis-cli ping; do sleep 2; done'
+        
+        # Wait for MinIO
+        timeout 30 bash -c 'until curl -f http://localhost:9002/minio/health/live; do sleep 2; done'
+        
+        # Wait for Greenmail (SMTP/IMAP)
+        timeout 30 bash -c 'until nc -z localhost 3025; do sleep 2; done'
+        timeout 30 bash -c 'until nc -z localhost 3143; do sleep 2; done'
+        
+        # Give services extra time to fully initialize
+        sleep 10
+        
+        echo "Services are ready!"
+
+    - name: Run email E2E tests
+      run: |
+        echo "Running email E2E tests..."
+        npm run test:e2e:email -- --reporters=default --reporters=jest-junit \
+          --outputFile=./test-results/email-e2e-tests.xml
+      env:
+        JEST_JUNIT_OUTPUT_DIR: ./test-results
+        JEST_JUNIT_OUTPUT_NAME: email-e2e-tests.xml
+        JOB_RETRY_DELAY: 3000
+
+    - name: Upload email E2E test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: email-e2e-test-results
+        path: ./test-results/
+        retention-days: 7
+
+    - name: Upload Greenmail logs
+      uses: actions/upload-artifact@v4
+      if: failure()
+      with:
+        name: greenmail-logs
+        path: |
+          ./mail-data/
+          ./mail-state/
+        retention-days: 3
+
+    - name: Stop test infrastructure
+      if: always()
+      run: |
+        echo "Stopping test infrastructure..."
+        docker compose -f ./docker-compose.test.yml down -v
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [unit-tests, e2e-tests, email-e2e-tests]
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Build Release
+      run: npm run build
+
+    - name: Create production build
+      run: |
+        # Remove dev dependencies and create production package
+        npm prune --production
+        
+        # Create build artifact
+        mkdir -p ./build-output
+        cp -r ./dist ./build-output/
+        cp -r ./node_modules ./build-output/
+        cp package.json ./build-output/
+        cp package-lock.json ./build-output/
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: price-list-processor-nest-build
+        path: ./build-output/
+        retention-days: 30
+
+  # Optional: Combine test results for reporting
+  test-summary:
+    runs-on: ubuntu-latest
+    needs: [unit-tests, e2e-tests, email-e2e-tests]
+    if: always()
+
+    steps:
+    - name: Download all test results
+      uses: actions/download-artifact@v4
+      with:
+        path: ./all-test-results
+
+    - name: Display test summary
+      run: |
+        echo "## Test Summary" >> $GITHUB_STEP_SUMMARY
+        echo "### Unit Tests" >> $GITHUB_STEP_SUMMARY
+        if [ -d "./all-test-results/unit-test-results" ]; then
+          echo "✅ Unit tests completed" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ Unit tests failed" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "### E2E Tests" >> $GITHUB_STEP_SUMMARY
+        if [ -d "./all-test-results/e2e-test-results" ]; then
+          echo "✅ E2E tests completed" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ E2E tests failed" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "### Email E2E Tests" >> $GITHUB_STEP_SUMMARY
+        if [ -d "./all-test-results/email-e2e-test-results" ]; then
+          echo "✅ Email E2E tests completed" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ Email E2E tests failed" >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: Upload combined test results
+      uses: actions/upload-artifact@v4
+      with:
+        name: all-test-results-combined
+        path: ./all-test-results/
+        retention-days: 14
