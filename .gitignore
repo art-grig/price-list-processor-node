@@ -185,7 +185,6 @@ publish/
 # Application specific
 uploads/
 downloads/
-storage/
 logs/
 
 # MinIO data
